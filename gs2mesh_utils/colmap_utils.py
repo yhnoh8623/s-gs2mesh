@@ -23,6 +23,55 @@ from gs2mesh_utils.third_party.colmap_runner.utils.read_write_model import read_
 #  Functions
 # =============================================================================
 
+# def poses_from_file(extrinsic_file):
+#     """
+#     Read camera extrinsics from a COLMAP images.txt file and return them as a torch tensor.
+
+#     Parameters:
+#     extrinsic_file (str): Path to the COLMAP images.txt file.
+
+#     Returns:
+#     torch.Tensor: Camera poses as a tensor.
+#     """
+#     extrinsics = read_images_text(extrinsic_file)
+#     images = OrderedDict(sorted(extrinsics.items()))
+#     qvecs = torch.from_numpy(np.stack([image.qvec for image in images.values()]))
+#     tvecs = torch.from_numpy(np.stack([image.tvec for image in images.values()]))
+#     Rs = camera_utils.quaternion.q_to_R(qvecs)
+#     poses = torch.cat([Rs, tvecs[..., None]], dim=-1)
+#     return poses
+
+# def poses_from_file(extrinsic_file, eval):
+#     """
+#     Read camera extrinsics from a COLMAP images.txt file and return them as a torch tensor.
+
+#     Parameters:
+#     extrinsic_file (str): Path to the COLMAP images.txt file.
+
+#     Returns:
+#     torch.Tensor: Camera poses as a tensor.
+#     """
+#     print('pose form file')
+#     extrinsics = read_images_text(extrinsic_file)
+#     #print(extrinsics.items())
+#     #images = OrderedDict(sorted(extrinsics.items()))
+#     images = OrderedDict(sorted(extrinsics.items(), key=lambda item: item[1].name))
+#     #print(images)
+#     if eval:
+#         selected_images = [img for idx, img, in enumerate(images.values()) if idx % 8 != 0]
+#         qvecs = torch.from_numpy(np.stack([image.qvec for image in selected_images]))
+#         tvecs = torch.from_numpy(np.stack([image.tvec for image in selected_images]))
+#         for img in selected_images:
+#             print(f"selected image = {img.name} in colmap_utils.py")
+#     else:
+#         qvecs = torch.from_numpy(np.stack([image.qvec for image in images.values()]))
+#         tvecs = torch.from_numpy(np.stack([image.tvec for image in images.values()]))
+#         names = np.stack([image.name for image in images.values()])
+
+#     Rs = camera_utils.quaternion.q_to_R(qvecs)
+#     poses = torch.cat([Rs, tvecs[..., None]], dim=-1)
+#     return poses, names
+
 def poses_from_file(extrinsic_file):
     """
     Read camera extrinsics from a COLMAP images.txt file and return them as a torch tensor.
@@ -34,7 +83,7 @@ def poses_from_file(extrinsic_file):
     torch.Tensor: Camera poses as a tensor.
     """
     extrinsics = read_images_text(extrinsic_file)
-    images = OrderedDict(sorted(extrinsics.items()))
+    images = OrderedDict(sorted(extrinsics.items(), key=lambda x: x[1].name))
     qvecs = torch.from_numpy(np.stack([image.qvec for image in images.values()]))
     tvecs = torch.from_numpy(np.stack([image.tvec for image in images.values()]))
     Rs = camera_utils.quaternion.q_to_R(qvecs)

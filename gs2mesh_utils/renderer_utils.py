@@ -20,7 +20,7 @@ import gs2mesh_utils.third_party.visualization.visualize as visualize
 from gs2mesh_utils.third_party.colmap_runner.utils.read_write_model import read_cameras_text
 
 import sys
-sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', 'third_party', 'gaussian-splatting')))
+sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', 'third_party', 'NexusGS')))
 from arguments import ModelParams, PipelineParams
 from gaussian_renderer import render
 from scene import Scene, GaussianModel, cameras
@@ -168,6 +168,7 @@ class Renderer:
                 result = least_squares(residuals, initial_guess)
                 radius = result.x[3]
             self.baseline = radius * (args.renderer_baseline_percentage/100)
+            self.baseline_percentage = args.renderer_baseline_percentage
 
         if args.renderer_sort_cameras:
             self.sorted_camera_indices = sort_camera_coordinates(np.array(camera_locations))
@@ -190,7 +191,9 @@ class Renderer:
                                 'cy':camera_params[camera_index]['cy'].item(),
                                 'intrinsic': intrinsic_from_camera_params(camera_params[camera_index]),
                                 'extrinsic': RT_from_rot_pos(tuple(camera_rotations[camera_index]),tuple(camera_locations[camera_index])),
-                                'baseline': self.baseline
+                                'baseline': self.baseline,
+                                'baseline_percentage': self.baseline_percentage,
+                                'camera_number':i
                                }, 'right':
                                {'rot':R_right, 
                                 'pos':T_right, 

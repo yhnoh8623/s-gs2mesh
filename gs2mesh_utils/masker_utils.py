@@ -35,7 +35,9 @@ def create_temp_jpg_folder(renderer):
         if os.path.exists(new_filename):
             continue
         output_dir = os.path.join(renderer.render_folder_name(camera_number))
+        #image = Image.open(os.path.join(output_dir+"_12", 'left.png'))
         image = Image.open(os.path.join(output_dir, 'left.png'))
+        
         image.convert('RGB').save(new_filename)
     return dst_dir
         
@@ -288,6 +290,8 @@ class Masker:
             )
             self.mask = (out_mask_logits[0] > 0.0).cpu().numpy().squeeze(0)
             output_dir = self.renderer.render_folder_name(self.index)
+            #np.save(os.path.join(output_dir+'_12', 'left_mask.npy'), self.mask)
+            #plt.imsave(os.path.join(output_dir+'_12', 'left_mask.png'), self.mask)
             np.save(os.path.join(output_dir, 'left_mask.npy'), self.mask)
             plt.imsave(os.path.join(output_dir, 'left_mask.png'), self.mask)
         else:
@@ -354,6 +358,8 @@ class Masker:
         for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.inference_state):
             mask = (out_mask_logits[0] > 0.0).cpu().numpy().squeeze(0)
             output_dir = self.renderer.render_folder_name(out_frame_idx)
+            #np.save(os.path.join(output_dir+'_12', 'left_mask.npy'), mask)
+            #plt.imsave(os.path.join(output_dir+'_12', 'left_mask.png'), mask)
             np.save(os.path.join(output_dir, 'left_mask.npy'), mask)
             plt.imsave(os.path.join(output_dir, 'left_mask.png'), mask)
         plt.close('all')

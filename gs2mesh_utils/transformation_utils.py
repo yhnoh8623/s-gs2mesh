@@ -62,6 +62,18 @@ def convert_R_T_to_GS(R, T):
     GS_R[:, 1:] *= -1
     return GS_R, GS_T
 
+def convert_GS_to_R_T(GS_R, GS_T, return_eulers=False):
+    GS_R[:, 1:] *= -1
+    W2C = np.eye(4)
+    W2C[:3, :3] = GS_R.transpose()
+    GS_T[1:] *= -1
+    W2C[:3, 3] = GS_T
+    #print(W2C)
+    Rt = np.linalg.inv(W2C)
+    T = Rt[:3, 3]
+    R = rotm2eul(Rt[:3, :3])
+    return R, T
+
 def intrinsic_from_camera_params(camera_params):
     """
     Create an intrinsic matrix from camera parameters (fx,fy,cx,cy).

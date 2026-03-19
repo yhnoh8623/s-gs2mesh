@@ -54,7 +54,7 @@ class TSDF:
             voxel_length=float(voxel_length),
             sdf_trunc= self.args.TSDF_sdf_trunc,
             color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8)
-
+        os.makedirs('./masked_images', exist_ok = True)
         for camera_number, left_camera in enumerate(tqdm(self.renderer.left_cameras)):
             if camera_number % self.args.TSDF_dilate != 0:
                 continue
@@ -63,6 +63,7 @@ class TSDF:
             if skip is not None and camera_number in skip:
                 continue
             output_dir = self.renderer.render_folder_name(camera_number)
+            #output_dir += '_12'
             image = np.array(Image.open(os.path.join(output_dir, 'left.png'))).astype(np.uint8)
             depth = np.load(os.path.join(output_dir, f'out_{self.model_name}', 'depth.npy'))
             if  self.args.TSDF_use_mask:
@@ -76,9 +77,13 @@ class TSDF:
                     erosion = cv2.erode(closing, erosion_kernel, iterations=1)
                     object_mask = erosion > 0.5
                 depth = depth * object_mask
+                
             if  self.args.TSDF_use_occlusion_mask:
                 occlusion_mask = np.load(os.path.join(output_dir, f'out_{self.model_name}', 'occlusion_mask.npy')).astype(bool)
                 depth = depth * occlusion_mask
+
+            masked_image = image * object_mask[..., None]
+
 
             depth = np.where(depth <  self.args.TSDF_min_depth_baselines * self.renderer.baseline, 0, depth)
 
