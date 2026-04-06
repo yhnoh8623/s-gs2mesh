@@ -15,8 +15,8 @@ import json
 import numpy as np
 # import torch
 from utils.system_utils import searchForMaxIteration
-from scene.dataset_readers import sceneLoadTypeCallbacks
-from scene.gaussian_model import GaussianModel
+from img_scene.dataset_readers import sceneLoadTypeCallbacks
+from img_scene.gaussian_model import GaussianModel
 #from scene.hf_gaussian_model import HFGaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON, cameraList_from_huggingfaceModel

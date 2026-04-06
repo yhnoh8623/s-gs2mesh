@@ -9,7 +9,7 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-from scene.cameras import Camera
+from img_scene.cameras import Camera
 import numpy as np
 import cv2
 from tqdm import tqdm
@@ -49,11 +49,14 @@ def loadCam(args, id, cam_info, resolution_scale, pcd=None):
     if resized_image_rgb.shape[1] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
     
-    K = cam_info.K
-    W, H = K[0, 2] * 2, K[1, 2] * 2
-    K[0, 2], K[1, 2] = resolution[0] / 2., resolution[1] / 2.
-    K[0, 0] = K[0, 0] * resolution[0] / W
-    K[1, 1] = K[1, 1] * resolution[1] / H
+    try:
+        K = cam_info.K
+        W, H = K[0, 2] * 2, K[1, 2] * 2
+        K[0, 2], K[1, 2] = resolution[0] / 2., resolution[1] / 2.
+        K[0, 0] = K[0, 0] * resolution[0] / W
+        K[1, 1] = K[1, 1] * resolution[1] / H
+    except:
+        K = None
     R = cam_info.R
     T = cam_info.T
 

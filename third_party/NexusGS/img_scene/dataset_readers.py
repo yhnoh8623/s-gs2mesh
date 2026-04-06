@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import imageio
 from typing import NamedTuple
-from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, rotmat2qvec, \
+from img_scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, rotmat2qvec, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
 from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
 from utils.general_utils import chamfer_dist
@@ -30,7 +30,7 @@ from tqdm import tqdm
 from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
-from scene.gaussian_model import BasicPointCloud
+from img_scene.gaussian_model import BasicPointCloud
 from utils.flow_utils import readFlow
 
 class CameraInfo(NamedTuple):
