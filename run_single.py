@@ -29,31 +29,7 @@ def run_single(args):
     colmap_dir = os.path.abspath(os.path.join(base_dir,'data',args.dataset_name,args.colmap_name))
     
     strings = create_strings(args)
-    
-    # =============================================================================
-    #  Extract frames from a video
-    # =============================================================================
-    
-    #if not args.skip_video_extraction:
-    #    video_name = f'{args.colmap_name}.{args.video_extension}'
-    #    extract_frames(os.path.join(colmap_dir, video_name), os.path.join(colmap_dir, 'images') , interval=args.video_interval)
-
-    # =============================================================================
-    #  Create downsampled COLMAP directory
-    # =============================================================================
-    
-    # #if args.downsample > 1.0:
-    #     create_downsampled_colmap_dir(colmap_dir, args.downsample)
-    #     args.colmap_name = f"{args.colmap_name}_downsample{args.downsample}"
-    #     TSDF_voxel_length=args.TSDF_voxel/512
-    #     colmap_dir = os.path.abspath(os.path.join(base_dir,'data',args.dataset_name,args.colmap_name))
-    #     strings = create_strings(args)
-    # =============================================================================
-    #  Run COLMAP with unknown poses
-    # =============================================================================
-    
-    # if not args.skip_colmap:
-    #     run_colmap(colmap_dir, use_gpu=True) # If there's an error regarding SiftGPU not being supported, set use_gpu to False
+ 
 
     # =============================================================================
     #  Run Gaussian Splatting
@@ -64,9 +40,16 @@ def run_single(args):
         
         try:
             os.chdir(os.path.join(base_dir, 'third_party', 'NexusGS'))
-            
+            renderer_baseline_candidate = ""
+            for renderer_baseline in args.renderer_baseline_candidate:
+                renderer_baseline_candidate += str(renderer_baseline) + " "
             iterations_str = ' '.join([str(args.warmup_iterations), str(args.GS_iterations)])
-            os.system(f"CUDA_VISIBLE_DEVICES=3 python train.py -r 1 -s {colmap_dir} --model_path {os.path.join(base_dir, 'splatting_output', strings['splatting'], args.colmap_name)} --warmup_iterations {args.warmup_iterations} --iterations {args.GS_iterations}  --save_iterations {iterations_str}")
+            os.system(f"CUDA_VISIBLE_DEVICES=3 python train.py -r 1 -s {colmap_dir} \
+                      --model_path {os.path.join(base_dir, 'splatting_output', strings['splatting'], args.colmap_name)} \
+                      --warmup_iterations {args.warmup_iterations} --iterations {args.GS_iterations}  --save_iterations {iterations_str} \
+                      --dataset_type {args.dataset_name}"
+            )
+
             os.chdir(base_dir)
         except:
             os.chdir(base_dir)

@@ -19,7 +19,7 @@ import os
 import cv2
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, l1_loss_mask, ssim
+from utils.loss_utils import l1_loss, l1_loss_mask, ssim, get_depth_ranking_loss
 from utils.general_utils import get_shading
 #from gaussian_renderer import render, network_gui
 import img_gaussian_renderer
@@ -38,6 +38,10 @@ from lpipsPyTorch import lpips
 import torch.nn.functional as F
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import eval_sh
+from utils.transformation_utils import get_shading
+from utils.point_utils import depths_to_points, depth_to_normal
+from utils.stereo_utils import Stereo
+
 
 @torch.no_grad()
 def clean_views(iteration, test_iterations, scene, gaussians, pipe, background):
@@ -51,6 +55,16 @@ def clean_views(iteration, test_iterations, scene, gaussians, pipe, background):
             visible_pnts += visibility_filter
         unvisible_pnts = ~visible_pnts
         gaussians.prune_points(unvisible_pnts, 0)
+
+def adaptive_baseline_selection(args, gaussians, scene, render, pipe, background):
+    train_cams = scene.getTrainCameras()
+    for cam in train_cams:
+        left_image = cam.original_image.permute(1, 2, 0)*255
+        for stereo_cam in cam.stereo_cam_list: 
+            right_image = render(stereo_cam, gaussians, pipe, background)["render"].permute(1, 2, 0)*255
+            
+            
+            
 
 def training_3d(dataset, opt, pipe, args):
     testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from = args.test_iterations, \
@@ -191,6 +205,7 @@ def training_3d(dataset, opt, pipe, args):
             if iteration > first_iter and (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
             # Densification
             if  iteration < opt.densify_until_iter and iteration not in clean_iterations:
@@ -234,10 +249,12 @@ def training_3d(dataset, opt, pipe, args):
 
 
 def training_2d(dataset, opt, pipe, args):
+    testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from = args.test_iterations, \
+            args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = geo_scene.GaussianModel(dataset.sh_degree)
-    scene = geo_scene.Scene(dataset, gaussians)
+    scene = geo_scene.Scene(dataset, gaussians, shuffle = False)
     gaussians.training_setup(opt)
 
 
@@ -254,6 +271,8 @@ def training_2d(dataset, opt, pipe, args):
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    scan = dataset.source_path.split('/')[-1]
+    os.makedirs(f'2d_test/{scan}', exist_ok=True)
     for iteration in range(first_iter, opt.iterations + 1):        
 
         iter_start.record()
@@ -277,8 +296,8 @@ def training_2d(dataset, opt, pipe, args):
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         
         # regularization
-        lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
-        lambda_dist = opt.lambda_dist if iteration > 3000 else 0.0
+        lambda_normal = opt.lambda_normal if iteration > 2500 else 0.0
+        lambda_dist = opt.lambda_dist if iteration > 1000 else 0.0
 
         rend_dist = render_pkg["rend_dist"]
         rend_normal  = render_pkg['rend_normal']
@@ -293,6 +312,10 @@ def training_2d(dataset, opt, pipe, args):
         total_loss.backward()
 
         iter_end.record()
+        
+        #print(render_pkg['surf_depth'].shape)
+        if iteration%100 == 0:
+            cv2.imwrite(os.path.join(f"2d_test/{scan}/{iteration}_depth.png"), get_shading(render_pkg['surf_depth'][0].detach().cpu().numpy(), 1e-4))
 
         with torch.no_grad():
             # Progress bar
@@ -319,10 +342,14 @@ def training_2d(dataset, opt, pipe, args):
                 tb_writer.add_scalar('train_loss_patches/dist_loss', ema_dist_for_log, iteration)
                 tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
 
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
+           # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, geo_gaussian_renderer.render, (pipe, background))
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss,
+                            testing_iterations, scene, img_gaussian_renderer.render, (pipe, background))
+
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
 
             # Densification
@@ -346,7 +373,44 @@ def training_2d(dataset, opt, pipe, args):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
-       
+def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
+    testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from = args.test_iterations, \
+            args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from
+    viewpoint_stack, pseudo_stack = None, None
+    
+    stereo = Stereo(args, device="cuda")
+
+    first_iter = 0
+    tb_writer = prepare_output_and_logger(dataset)
+    
+
+    bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+
+    ema_loss_for_log = 0.0
+
+    img_gaussians = img_scene.GaussianModel(args)
+
+    im_scene = img_scene.Scene(args, img_gaussians, shuffle=False)
+    
+    if img_checkpoint:
+        (model_params, first_iter) = torch.load(img_checkpoint)
+        img_gaussians.restore(model_params, opt)
+        
+
+        
+    for cam in im_scene.getTrainCameras():
+        for stereo_cam in cam.stereo_cam_list:
+             print(f"Baseline for {cam.image_name} : {stereo_cam.baseline}")
+        print(cam.stereo_cam_list[0].baseline)
+        
+        
+    
+    
+    
+
+
+           
 
 def prepare_output_and_logger(args):
     if not args.model_path:
@@ -460,7 +524,14 @@ if __name__ == "__main__":
     #training_3d(lp.extract(args), op.extract(args), pp.extract(args), args)
     
     args.model_path = os.path.join(model_path_save, "2d")
-    training_2d(lp.extract(args), op.extract(args), pp.extract(args), args)
+    #training_2d(lp.extract(args), op.extract(args), pp.extract(args), args)
+    
+    args.model_path = os.path.join(model_path_save, "final")
+    img_checkpoint = os.path.join(model_path_save, "3d/chkpnt" + str(args.warmup_iterations) + ".pth")
+    geo_checkpoint = os.path.join(model_path_save, "2d/chkpnt" + str(args.warmup_iterations) + ".pth")
+    
+    #print(img_checkpoint)
+    training_mutual(lp.extract(args), op.extract(args), pp.extract(args), args, img_checkpoint, geo_checkpoint)
 
     # All done
     print("\nTraining complete.")

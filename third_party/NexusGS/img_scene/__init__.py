@@ -17,6 +17,7 @@ import numpy as np
 from utils.system_utils import searchForMaxIteration
 from img_scene.dataset_readers import sceneLoadTypeCallbacks
 from img_scene.gaussian_model import GaussianModel
+from img_scene.cameras import Camera
 #from scene.hf_gaussian_model import HFGaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON, cameraList_from_huggingfaceModel
@@ -24,6 +25,8 @@ from utils.pose_utils import generate_random_poses_llff, generate_random_poses_3
 # from gaussian_renderer import render
 from utils.flow_utils import compute_depth_by_flow, construct_pcd
 from utils.graphics_utils import BasicPointCloud
+from utils.colmap_utils import poses_from_file
+from utils.transformation_utils import rotm2eul, eul2rotm, intrinsic_from_camera_params, RT_from_rot_pos, convert_R_T_to_GS, convert_GS_to_R_T, calculate_right_camera_pose
 import torch
 
 class Scene:
@@ -99,6 +102,41 @@ class Scene:
                 compute_depth_by_flow(self.train_cameras[resolution_scale], args.valid_dis_threshold, args.near_n)
             self.pcd = construct_pcd(self.train_cameras[1.0])
             self.gaussians.create_from_pcd(self.pcd, None, self.cameras_extent, args.drop_rate)
+        
+        print(f'renderer baseline : {args.renderer_baseline_candidate}')
+        for resolution_scale in resolution_scales:
+            self.stereo_cams = self.generateStereoCams(args, self.train_cameras[resolution_scale], args.renderer_baseline_candidate)
+    
+    def generateStereoCams(self, args, cameras, baseline_candidates):
+        stereo_cams = []
+        self.poses = poses_from_file(os.path.join(args.source_path, "sparse/0/images.txt"))
+        
+        poses_inv = [np.linalg.inv(np.vstack((pose, np.array([0, 0, 0, 1])))) for pose in self.poses]
+        camera_rotations = [rotm2eul(pose[:3,:3]) for pose in poses_inv]
+        for i in range(len(camera_rotations)):
+            rotation = eul2rotm(camera_rotations[i])
+            rotation[:,1:]*=-1
+            camera_rotations[i] = rotm2eul(rotation)
+
+        camera_locations = [pose[:3,3].tolist() for pose in poses_inv]
+        radius = None
+        ts = np.array(camera_locations)
+        radius = np.median(np.linalg.norm(ts - ts.mean(axis=0),axis=1))
+        if args.dataset_type == "DTU" or args.dataset_type == "dtu": # For backwards compatibility with paper results
+            radius *= 2
+            
+        for cam in cameras:
+            stereo_cam_list = []
+            for baseline in baseline_candidates:
+                left_R, left_T = convert_GS_to_R_T(cam.R, cam.T)
+                right_rot, right_pos = calculate_right_camera_pose(left_R, left_T, baseline*radius)
+                right_R, right_T = convert_R_T_to_GS(right_rot, right_pos)
+                stereo_cam = Camera(0, right_R, right_T, cam.K, cam.FoVx, cam.FoVy, cam.original_image, cam.alpha_mask, cam.image_name, cam.uid, baseline=baseline, original_cam=cam)
+                stereo_cams.append(stereo_cam)
+                stereo_cam_list.append(stereo_cam)
+            cam.stereo_cam_list = stereo_cam_list
+                
+        return stereo_cams
     
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))

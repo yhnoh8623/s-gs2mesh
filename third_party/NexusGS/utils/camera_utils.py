@@ -49,6 +49,8 @@ def loadCam(args, id, cam_info, resolution_scale, pcd=None):
     if resized_image_rgb.shape[1] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
     
+    #print(f"K = {cam_info.K}")
+
     try:
         K = cam_info.K
         W, H = K[0, 2] * 2, K[1, 2] * 2

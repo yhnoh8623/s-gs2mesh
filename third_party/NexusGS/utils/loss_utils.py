@@ -76,3 +76,47 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
 
 
 
+
+def patchify(img, patch_size):
+    img = img.unsqueeze(0)
+    img = F.unfold(img, patch_size, stride=patch_size)
+    img = img.transpose(2, 1).contiguous()
+    return img.view(-1, patch_size, patch_size)
+
+def patched_depth_ranking_loss(surf_depth, mono_depth, patch_size=-1, margin=1e-4):
+    if patch_size > 0:
+        surf_depth_patches = patchify(surf_depth, patch_size).view(-1, patch_size * patch_size) # [N, P*P]
+        mono_depth_patches = patchify(mono_depth, patch_size).view(-1, patch_size * patch_size)
+    else:
+        surf_depth_patches = surf_depth.reshape(-1).unsqueeze(0)
+        mono_depth_patches = mono_depth.reshape(-1).unsqueeze(0)
+
+    length = (surf_depth_patches.shape[1]) // 2 * 2
+    rand_indices = torch.randperm(length)
+    surf_depth_patches_rand = surf_depth_patches[:, rand_indices]
+    mono_depth_patches_rand = mono_depth_patches[:, rand_indices]
+
+    patch_rank_loss = torch.max(
+        torch.sign(mono_depth_patches_rand[:, :length // 2] - mono_depth_patches_rand[:, length // 2:]) * \
+            (surf_depth_patches_rand[:, length // 2:] - surf_depth_patches_rand[:, :length // 2]) + margin,
+        torch.zeros_like(mono_depth_patches_rand[:, :length // 2], device=mono_depth_patches_rand.device)
+    ).mean()
+
+    return patch_rank_loss
+
+def get_depth_ranking_loss(surf_depth, mono_depth, object_mask=None):
+    depth_rank_loss = 0.0
+
+    for transform in [transform1, transform2]:
+        surf_depth_crop = transform(surf_depth)
+        mono_depth_crop = transform(mono_depth.unsqueeze(0))
+
+        object_mask_crop = None
+        if object_mask is not None:
+            object_mask_crop = transform(object_mask)
+            surf_depth_crop[object_mask_crop.float() < 0.5] = -1e-4
+            mono_depth_crop[object_mask_crop.float() < 0.5] = -1e-4
+
+        depth_rank_loss += 0.5 * patched_depth_ranking_loss(surf_depth_crop, mono_depth_crop, patch_size=32)
+
+    return depth_rank_loss

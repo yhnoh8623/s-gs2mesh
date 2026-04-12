@@ -75,6 +75,7 @@ class PipelineParams(ParamGroup):
         self.debug = False
         self.use_confidence = False
         self.use_color = True
+        self.depth_ratio = 0.0
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
@@ -104,6 +105,7 @@ class OptimizationParams(ParamGroup):
         self.sample_pseudo_interval = 10
         self.dist_thres = 10.
         self.depth_weight = 0.0
+        self.renderer_baseline_candidate = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
         self.diffusion_inpaint_iter = -1
         self.size_threshold = -1
@@ -115,6 +117,9 @@ class OptimizationParams(ParamGroup):
         self.prune_dis_threshold = 5
         self.dis_prune = False
         self.split_num = 4
+        self.opacity_cull = 0.05
+        self.lambda_dist = 0.0
+        self.lambda_normal = 0.05
         super().__init__(parser, "Optimization Parameters")
 
 

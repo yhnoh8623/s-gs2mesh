@@ -11,6 +11,7 @@
 
 import os
 import random
+import cv2
 import json
 from utils.system_utils import searchForMaxIteration
 from geo_scene.dataset_readers import sceneLoadTypeCallbacks
@@ -91,8 +92,13 @@ class Scene:
         else:
             for resolution_scale in resolution_scales:
                 compute_depth_by_flow(self.train_cameras[resolution_scale], args.valid_dis_threshold, args.near_n)
+            
+            for idx, cam in enumerate(self.train_cameras[1.0]):
+                flow_depth = cam.flow_depth
+                cv2.imwrite(f"flow_depth_{idx}.png", (flow_depth.detach().cpu().numpy())*255)
             self.pcd = construct_pcd(self.train_cameras[1.0])
-            self.gaussians.create_from_pcd(self.pcd, None, self.cameras_extent, args.drop_rate)
+            print(f"abcd : {(self.pcd[0].shape)}")
+            self.gaussians.create_from_pcd(self.pcd, self.cameras_extent)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))

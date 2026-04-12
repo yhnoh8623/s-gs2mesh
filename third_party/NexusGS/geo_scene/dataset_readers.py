@@ -78,7 +78,7 @@ def getNerfppNorm(cam_info):
 
 def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, n_views=3):
     cam_infos = []
-    for idx, key in enumerate(cam_extrinsics):
+    for idx, key in enumerate(sorted(cam_extrinsics.keys())):
         sys.stdout.write('\r')
         # the exact output you're looking for:
         sys.stdout.write("Reading camera {}/{}".format(idx+1, len(cam_extrinsics)))
@@ -94,7 +94,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, n_vie
         R = np.transpose(qvec2rotmat(extr.qvec))
         T = np.array(extr.tvec)
         K = np.zeros((3,3)).astype(np.float32)
-
+        K[2, 2] = 1.
         try:
             bounds = np.load(os.path.join(path, 'poses_bounds.npy'))[idx, -2:]
         except:
@@ -102,11 +102,19 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, n_vie
 
         if intr.model=="SIMPLE_PINHOLE":
             focal_length_x = intr.params[0]
+            K[0,0] = intr.params[0]
+            K[1,1] = intr.params[0]
+            K[0,2] = intr.params[1]
+            K[1,2] = intr.params[2]
             FovY = focal2fov(focal_length_x, height)
             FovX = focal2fov(focal_length_x, width)
         elif intr.model=="PINHOLE":
             focal_length_x = intr.params[0]
             focal_length_y = intr.params[1]
+            K[0,0] = intr.params[0]
+            K[1,1] = intr.params[1]
+            K[0,2] = intr.params[2]
+            K[1,2] = intr.params[3]
             FovY = focal2fov(focal_length_y, height)
             FovX = focal2fov(focal_length_x, width)
         else:
@@ -183,6 +191,10 @@ def readColmapSceneInfo(path, images, eval, n_views = 3, llffhold=8):
         #jump = total_cam // 5
         train_cam_infos = cam_infos
         test_cam_infos = []
+
+    # for cam in train_cam_infos:
+    #     print(cam.image_name)
+    #     print('dd')
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 

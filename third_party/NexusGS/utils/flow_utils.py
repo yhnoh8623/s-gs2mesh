@@ -63,6 +63,8 @@ def compute_depth_by_flow(cams, valid_dis_threshold, n):
         R_s = torch.tensor(cam_s.R.transpose()).cuda().float()
         T_s = torch.tensor(cam_s.T.transpose()).cuda().float().view(3, 1)
         K_s = torch.tensor(cam_s.K.transpose()).cuda().float()
+        #print(R_s, T_s, K_s)
+        #print(cam_s.image_name)
         image_s = cam_s.original_image.cuda()
 
 
