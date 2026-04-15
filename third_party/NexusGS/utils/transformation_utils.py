@@ -62,7 +62,9 @@ def convert_R_T_to_GS(R, T):
     GS_R[:, 1:] *= -1
     return GS_R, GS_T
 
-def convert_GS_to_R_T(GS_R, GS_T, return_eulers=False):
+def convert_GS_to_R_T(G_R, G_T, return_eulers=False):
+    GS_R = G_R.copy()
+    GS_T = G_T.copy()
     GS_R[:, 1:] *= -1
     W2C = np.eye(4)
     W2C[:3, :3] = GS_R.transpose()

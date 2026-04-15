@@ -28,6 +28,7 @@ import sys
 #from scene import Scene, GaussianModel
 import img_scene
 import geo_scene
+#from img_scene import cameras
 from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
@@ -397,12 +398,24 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
         (model_params, first_iter) = torch.load(img_checkpoint)
         img_gaussians.restore(model_params, opt)
         
-
-        
+    scan = args.source_path.split('/')[-1]
+    os.makedirs(f"baseline_test/{scan}", exist_ok = True)
+    stereo = Stereo(args, device='cuda')
     for cam in im_scene.getTrainCameras():
+        
+        gt_image = cam.original_image*255
         for stereo_cam in cam.stereo_cam_list:
-             print(f"Baseline for {cam.image_name} : {stereo_cam.baseline}")
-        print(cam.stereo_cam_list[0].baseline)
+            #print(f"Baseline for {cam.image_name} : {stereo_cam.baseline}")
+            view = img_scene.Camera(0, stereo_cam.R, stereo_cam.T, None, cam.FoVx, cam.FoVy, torch.rand(3,cam.image_height,cam.image_width), None, "abcd", 0)
+            #view = img_scene.Camera(0, cam.R, cam.T, None, cam.FoVx, cam.FoVy, torch.rand(3,cam.image_height,cam.image_width), None, "abcd", 0)
+            
+            render_pkg = img_gaussian_renderer.render(view, img_gaussians, pipe, background)
+            stereo_image = render_pkg["render"]*255
+            
+            depth, occlusion_mask = stereo.run_single(gt_image[None], stereo_image[None]) # target shape : torch.Size([1, 3, 1162, 1554])
+            #cv2.imwrite(f"baseline_test/{scan}/{cam.image_name}_{stereo_cam.baseline}.png", cv2.cvtColor((stereo_image.permute(1, 2, 0) * 255).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
+            
+             
         
         
     

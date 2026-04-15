@@ -127,11 +127,15 @@ class Scene:
             
         for cam in cameras:
             stereo_cam_list = []
+            #change_T = [cam.T[0], -1*cam.T[1], -1*cam.T[2]]
             for baseline in baseline_candidates:
+                
+               # print(f"before : {cam.T}")
                 left_R, left_T = convert_GS_to_R_T(cam.R, cam.T)
-                right_rot, right_pos = calculate_right_camera_pose(left_R, left_T, baseline*radius)
+                right_rot, right_pos = calculate_right_camera_pose(left_R, left_T, baseline*radius/100)
                 right_R, right_T = convert_R_T_to_GS(right_rot, right_pos)
                 stereo_cam = Camera(0, right_R, right_T, cam.K, cam.FoVx, cam.FoVy, cam.original_image, cam.alpha_mask, cam.image_name, cam.uid, baseline=baseline, original_cam=cam)
+                #print(f"after : {right_T}")
                 stereo_cams.append(stereo_cam)
                 stereo_cam_list.append(stereo_cam)
             cam.stereo_cam_list = stereo_cam_list
