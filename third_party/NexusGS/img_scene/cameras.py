@@ -14,10 +14,11 @@ from torch import nn
 import numpy as np
 import cv2
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix
+import math
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, K, FoVx, FoVy, image, gt_alpha_mask,
-                 image_name, uid, trans=np.array([0.0, 0.0, 0.0]),
+                 image_name, uid, feats=None, pair=None, trans=np.array([0.0, 0.0, 0.0]),
                  scale=1.0, data_device = "cuda", mask = None, bounds=None, flow=None, original_cam = None, baseline = None):
         super(Camera, self).__init__()
         #print(T)
@@ -37,12 +38,19 @@ class Camera(nn.Module):
         self.stereo_cam_list = None
         self.stereo_cam = None
         self.baseline = baseline
+        self.radius = None
         if mask is not None:
             self.alpha_mask = torch.tensor(mask)
         else:
             self.alpha_mask = None
         self.bounds = bounds
         self.flow = flow
+        if feats is not None:
+            self.feat = [
+                feats[0][:, :math.ceil(image.shape[1]), :math.ceil(image.shape[2])].to('cuda'),
+                feats[1][:, :math.ceil(image.shape[1] / 2), :math.ceil(image.shape[2] / 2)].to('cuda')
+            ]
+        self.pair = pair
 
         try:
             self.data_device = torch.device(data_device)
@@ -54,6 +62,16 @@ class Camera(nn.Module):
         self.original_image = image.clamp(0.0, 1.0).to(self.data_device)
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
+        
+        fx = self.image_width / (2 * math.tan(self.FoVx / 2.))
+        fy = self.image_height / (2 * math.tan(self.FoVy / 2.))
+        self.intrinsic = torch.tensor(
+            [[fx, 0., self.image_width/2., 0.],
+            [0., fy, self.image_height/2., 0.],
+            [0., 0., 1.0, 0.],
+            [0., 0., 0., 1.0]]
+        ).float().cuda()
+
 
         if gt_alpha_mask is not None:
             self.original_image *= gt_alpha_mask.to(self.data_device)

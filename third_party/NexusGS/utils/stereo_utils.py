@@ -85,44 +85,41 @@ class Stereo:
         img = torch.from_numpy(img).permute(2, 0, 1).float()
         return img[None].to(self.device)
     
-    def run_single(self, image1, image2, start=0, visualize=False, resolution = 1):
-        disparities = {'LR': None, 'RL': None}
-        padder = InputPadder(image1.shape, divis_by=32)
-        
-        for direction in ['LR', 'RL']:
-        #print('shape')
-            #print(image1.shape)
-            if direction == 'LR':
-                image1, image2 = padder.pad(image1, image2)
-
-            if direction == 'LR':
-                image1_to_model = image1
-                image2_to_model = image2
-            elif direction == 'RL':
-                image1_to_model = torch.flip(image2, dims=[3])
-                image2_to_model = torch.flip(image1, dims=[3])
+    def run_single(self, image1, image2, baseline_percentage, fx, radius, start=0, visualize=False, resolution = 1):
+        with torch.no_grad():
             
-            disp_pr = self.model(image1_to_model, image2_to_model, iters = self.model_args.valid_iters, scale_iters = self.model_args.scale_iters, test_mode=True)
-            #prev_flow, flow_up = self.model(image1_to_model, image2_to_model, iters=self.model_args.valid_iters, test_mode=True, flow_init=prev_flows[direction] if self.args.stereo_warm else None)
-            if direction == 'RL':
-                disp_pr = torch.flip(disp_pr, dims=[3])
+            disparities = {'LR': None, 'RL': None}
+            padder = InputPadder(image1.shape, divis_by=32)
+            
+            for direction in ['LR', 'RL']:
+            #print('shape')
+                #print(image1.shape)
+                if direction == 'LR':
+                    image1, image2 = padder.pad(image1, image2)
+
+                if direction == 'LR':
+                    image1_to_model = image1
+                    image2_to_model = image2
+                elif direction == 'RL':
+                    image1_to_model = torch.flip(image2, dims=[3])
+                    image2_to_model = torch.flip(image1, dims=[3])
                 
-            disparities[direction] = padder.unpad(disp_pr).detach().cpu().squeeze().numpy()
-            #disparities[direction] = padder.unpad(disp_pr).squeeze()
+                disp_pr = self.model(image1_to_model, image2_to_model, iters = self.model_args.valid_iters, scale_iters = self.model_args.scale_iters, test_mode=True)
+                #prev_flow, flow_up = self.model(image1_to_model, image2_to_model, iters=self.model_args.valid_iters, test_mode=True, flow_init=prev_flows[direction] if self.args.stereo_warm else None)
+                if direction == 'RL':
+                    disp_pr = torch.flip(disp_pr, dims=[3])
+                    
+                disparities[direction] = padder.unpad(disp_pr).detach().cpu().squeeze().numpy()
+                #disparities[direction] = padder.unpad(disp_pr).squeeze()
 
-            
-            output_directory = os.path.join(output_dir, f'out_{self.model_name}')
-            os.makedirs(output_directory, exist_ok=True)
-            
-            np.save(os.path.join(output_directory, f"disparity_{direction}.npy"), disparities[direction])
-            plt.imsave(os.path.join(output_directory, f"disparity_{direction}.png"), disparities[direction], cmap='jet')
+                
         
-        occlusion_mask, disparity_difference = self.get_occlusion_mask(disparities['LR'], disparities['RL'], self.args.stereo_occlusion_threshold, baseline_percentage = left_camera['baseline_percentage'])
-        right_occlusion_mask = self.get_right_occlusion_mask(disparities['LR'], disparities['RL'], self.args.stereo_occlusion_threshold)
-        depth = (left_camera['fx'] * baseline) / (disparities['LR'])
-        depth_right = (left_camera['fx'] * baseline) / (disparities['RL'])
-        
-        return depth, occlusion_mask
+            occlusion_mask, disparity_difference = self.get_occlusion_mask(disparities['LR'], disparities['RL'], self.args.stereo_occlusion_threshold, baseline_percentage = baseline_percentage)
+            right_occlusion_mask = self.get_right_occlusion_mask(disparities['LR'], disparities['RL'], self.args.stereo_occlusion_threshold)
+            depth = (fx * radius * baseline_percentage / 100) / (disparities['LR'])
+            depth_right = (fx * radius * baseline_percentage / 100) / (disparities['RL'])
+            
+            return torch.from_numpy(depth).to('cuda'), torch.from_numpy(occlusion_mask).to('cuda'), torch.from_numpy(depth_right).to('cuda'), torch.from_numpy(right_occlusion_mask).to('cuda')
    
     def run(self, start=0, visualize=False, resolution = 1, use_GT_for_stereo_input = True):
         """
@@ -311,7 +308,9 @@ class Stereo:
         disparity_difference = np.abs(x_grid - x_reprojected_clipped)
    
         #new_occlusion_threshold = (occlusion_threshold / 2 * baseline_percentage)
-        print(f"{baseline_percentage} new occlusion threshold : {occlusion_threshold}")
+        new_occlusion_threshold = occlusion_threshold / 6 * baseline_percentage
+        print(f"{baseline_percentage} new occlusion threshold : {new_occlusion_threshold}")
+        
         occlusion_mask = (disparity_difference > occlusion_threshold).astype(np.uint8)
        
         occlusion_mask[(x_projected < 0) | (x_projected >= width)] = 1

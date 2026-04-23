@@ -244,6 +244,8 @@ def construct_pcd(cams):
 
         if cam.alpha_mask is not None:
             alpha_mask = cam.alpha_mask.cuda().squeeze().bool()
+            print(alpha_mask.shape)
+            print(flow_depth_mask.shape)
             flow_depth_mask = torch.logical_and(flow_depth_mask, alpha_mask)
         
         vaild_num = int(flow_depth_mask.sum())

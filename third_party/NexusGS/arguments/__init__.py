@@ -61,6 +61,8 @@ class ModelParams(ParamGroup):
         self.dataset_type = 'dtu'
         self.near_n = 2
         self.revision = "main"
+        
+        self.stereo_occlusion_threshold = 3
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

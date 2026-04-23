@@ -19,7 +19,7 @@ from typing import NamedTuple
 from img_scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, rotmat2qvec, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
 from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
-from utils.general_utils import chamfer_dist
+from utils.general_utils import chamfer_dist, PILtoTorch
 import numpy as np
 import json
 import cv2
@@ -32,6 +32,7 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from img_scene.gaussian_model import BasicPointCloud
 from utils.flow_utils import readFlow
+from utils.feat_utils import FeatExt, load_pair
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -48,6 +49,8 @@ class CameraInfo(NamedTuple):
     height: int
     mask: np.array
     bounds: np.array
+    feat: list = None
+    pair: list = None
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -168,6 +171,55 @@ def readColmapCameras2(cam_extrinsics, cam_intrinsics, images_folder):
 def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, n_views, rgb_mapping, dataset_type='llff'):
     cam_infos = []
     model_zoe = None
+    masks_folder = os.path.join(path, "mask")
+    mask_list = ['022', '025', '028']
+    from glob import glob
+    def glob_imgs(path):
+        imgs = []
+        for ext in ['*.png', '*.jpg', '*.JPEG', '*.JPG']:
+            imgs.extend(glob(os.path.join(path, ext)))
+        return imgs
+
+    image_paths = sorted(glob_imgs(images_folder))
+
+    n_images = len(image_paths)
+
+    feats_list = []
+    scale_list = [1, 2]
+
+    ori_w, ori_h = 1600, 1200
+    
+    for scale in scale_list:
+        feat_ext = FeatExt().cuda()
+        feat_ext.eval()
+        for p in feat_ext.parameters():
+            p.requires_grad = False
+
+        size_w = ori_w // scale
+        size_h = ori_h // scale
+
+        rgb_2xd = torch.zeros(n_images, 3, size_h, size_w)
+
+        for i in range(n_images):
+            image_pil = Image.open(image_paths[i])
+            resolution = (int(image_pil.size[0] / scale), int(image_pil.size[1] / scale))
+            image = torch.cat([PILtoTorch(im, resolution) for im in image_pil.split()[:3]], dim=0)
+            rgb_2xd[i, :, :image.shape[1], :image.shape[2]] = image
+
+        mean = torch.tensor([0.485, 0.456, 0.406]).float()
+        std = torch.tensor([0.229, 0.224, 0.225]).float()
+        rgb_2xd = (rgb_2xd / 2 + 0.5 - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
+
+        feats = []
+        feat_eval_bs = 20
+        for start_i in range(0, n_images, feat_eval_bs):
+            eval_batch = rgb_2xd[start_i:start_i + feat_eval_bs]
+            feat2 = feat_ext(eval_batch.cuda())[2].detach().cpu()
+            feats.append(feat2)
+        feats = torch.cat(feats, dim=0)
+        feats = feats[..., :(ori_h // 2) // scale, :(ori_w // 2) // scale]
+        feats_list.append(feats)
+    
     for idx, key in enumerate(sorted(cam_extrinsics.keys())):
         sys.stdout.write('\r')
         # the exact output you're looking for:
@@ -224,8 +276,20 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, n_vie
                 if os.path.exists(flow_path):
                     flow.append((j, readFlow(flow_path)))
 
+        pair = []
+        for i in range(n_images//5):
+            pair.append(str(i))
+            
+        mask = None
+        #print(f"{image_name}>>>")
+        mask_path = os.path.join(masks_folder, f"{mask_list[int(image_name)]}.png")
+        #print(mask_path)
+        if os.path.exists(mask_path):
+            mask = np.array(Image.open(mask_path).convert("L"))
+            
         cam_info = CameraInfo(uid=uid, R=R, T=T, K=K, FovY=FovY, FovX=FovX, image=image, flow=flow, image_path=image_path,
-                image_name=image_name, width=width, height=height, mask=None, bounds=bounds)
+                image_name=image_name, width=width, height=height, mask=mask, bounds=bounds,
+                feat=[feats[idx] for feats in feats_list], pair=[int(idx) for idx in pair])
         cam_infos.append(cam_info)
 
     sys.stdout.write('\n')

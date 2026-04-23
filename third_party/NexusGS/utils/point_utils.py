@@ -7,10 +7,18 @@ import matplotlib.pyplot as plt
 import math
 
 
-def depths_to_points(view, depthmap):
+def depths_to_points(view, depthmap, resolution = 1): #resolution = 2 구현 필요
     c2w = (view.world_view_transform.T).inverse()
     W, H = view.image_width, view.image_height
+    W /= resolution
+    H /= resolution
     intrins = view.intrinsic[:3, :3]
+    for i in range(3):
+        for j in range(3):
+            intrins[i, j] /= resolution
+    print(intrins)
+    print(f"point_utils.py : depths to points")
+    
     grid_x, grid_y = torch.meshgrid(torch.arange(W, device='cuda').float(), torch.arange(H, device='cuda').float(), indexing='xy')
     points = torch.stack([grid_x, grid_y, torch.ones_like(grid_x)], dim=-1).reshape(-1, 3)
     rays_d = points @ intrins.inverse().T @ c2w[:3,:3].T
