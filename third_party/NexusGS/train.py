@@ -44,6 +44,7 @@ from utils.point_utils import depths_to_points, depth_to_normal
 from utils.stereo_utils import Stereo
 from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
 from utils.feat_utils import get_feat_loss
+import torch.nn.functional as F
 
 @torch.no_grad()
 def clean_views(iteration, test_iterations, scene, gaussians, pipe, background):
@@ -404,6 +405,7 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
     stereo = Stereo(args, device='cuda')
     
     for cam in im_scene.getTrainCameras():
+        cam.half_alpha_mask = F.interpolate(cam.alpha_mask[None][None], scale_factor=0.5, mode='bilinear', align_corners=False)[0][0].to('cuda')
         
         gt_image = cam.original_image*255
         for stereo_cam in cam.stereo_cam_list:
@@ -413,17 +415,19 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
             
             render_pkg = img_gaussian_renderer.render(view, img_gaussians, pipe, background)
             stereo_image = render_pkg["render"]*255
-    
+
             print('!!')
-            depth, occlusion_mask, depth_right, depth_occlusion_mask = stereo.run_single(gt_image[None], stereo_image[None], baseline_percentage = stereo_cam.baseline, \
-                            fx = fov2focal(cam.FoVx, cam.image_width), radius = cam.radius) # target shape : torch.Size([1, 3, 1162, 1554])
-            cv2.imwrite(f"baseline_test/{scan}/{cam.image_name}_{stereo_cam.baseline}.png", cv2.cvtColor((stereo_image.permute(1, 2, 0)).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
+            gt_half = F.interpolate(gt_image[None], scale_factor=0.5, mode='bilinear', align_corners=False)[0]
+            stereo_half = F.interpolate(stereo_image[None], scale_factor=0.5, mode='bilinear', align_corners=False)[0]
+            depth, occlusion_mask, depth_right, depth_occlusion_mask = stereo.run_single(gt_half[None], stereo_half[None], baseline_percentage = stereo_cam.baseline, \
+                            fx = fov2focal(cam.FoVx, cam.image_width)/2, radius = cam.radius) # target shape : torch.Size([1, 3, 1162, 1554])
+            cv2.imwrite(f"baseline_test/{scan}/{cam.image_name}_{stereo_cam.baseline}.png", cv2.cvtColor((stereo_half.permute(1, 2, 0)).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
             cv2.imwrite(f"baseline_test/{scan}/depth_{cam.image_name}_{stereo_cam.baseline}.png", get_shading(depth.detach().cpu().numpy(), 1e-4))
             print('???')
-            surf_points = depths_to_points(cam, depth, resolution = 1)
+            surf_points = depths_to_points(cam, depth, resolution = 2)
             mask = (depth.view(-1) > 0)
-            mask = mask & cam.alpha_mask
-            feat_loss = get_feat_loss(surf_points, cam, im_scene.getTrainCameras(), mask, resolution=1)
+            mask = mask & cam.half_alpha_mask.view(-1)
+            feat_loss = get_feat_loss(surf_points, cam, im_scene.getTrainCameras(), mask, resolution=2)
              
             print(f"{stereo_cam.baseline}  -->  {feat_loss}")
         
