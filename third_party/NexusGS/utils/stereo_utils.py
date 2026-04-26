@@ -85,6 +85,38 @@ class Stereo:
         img = torch.from_numpy(img).permute(2, 0, 1).float()
         return img[None].to(self.device)
     
+    def run_single_w_gradient(self, image1, image2, baseline_percentage, fx, radius, start=0, visualize=False, resolution = 1):
+            disparities = {'LR': None, 'RL': None}
+            padder = InputPadder(image1.shape, divis_by=32)
+            
+            for direction in ['LR', 'RL']:
+            #print('shape')
+                #print(image1.shape)
+                if direction == 'LR':
+                    image1, image2 = padder.pad(image1, image2)
+
+                if direction == 'LR':
+                    image1_to_model = image1
+                    image2_to_model = image2
+                elif direction == 'RL':
+                    image1_to_model = torch.flip(image2, dims=[3])
+                    image2_to_model = torch.flip(image1, dims=[3])
+                
+                disp_pr = self.model(image1_to_model, image2_to_model, iters = self.model_args.valid_iters, scale_iters = self.model_args.scale_iters, test_mode=True)
+                #prev_flow, flow_up = self.model(image1_to_model, image2_to_model, iters=self.model_args.valid_iters, test_mode=True, flow_init=prev_flows[direction] if self.args.stereo_warm else None)
+                if direction == 'RL':
+                    disp_pr = torch.flip(disp_pr, dims=[3])
+                    
+                disparities[direction] = padder.unpad(disp_pr).squeeze()
+
+            occlusion_mask, disparity_difference = self.get_occlusion_mask(disparities['LR'].detach().cpu().numpy(), disparities['RL'].detach().cpu().numpy(), self.args.stereo_occlusion_threshold, baseline_percentage = baseline_percentage)
+            right_occlusion_mask = self.get_right_occlusion_mask(disparities['LR'], disparities['RL'], self.args.stereo_occlusion_threshold)
+            depth = (fx * radius * baseline_percentage / 100) / (disparities['LR'])
+            depth_right = (fx * radius * baseline_percentage / 100) / (disparities['RL'])
+            
+            return torch.from_numpy(depth).to('cuda'), torch.from_numpy(occlusion_mask).to('cuda'), torch.from_numpy(depth_right).to('cuda'), torch.from_numpy(right_occlusion_mask).to('cuda')
+   
+    
     def run_single(self, image1, image2, baseline_percentage, fx, radius, start=0, visualize=False, resolution = 1):
         with torch.no_grad():
             
@@ -112,8 +144,6 @@ class Stereo:
                 disparities[direction] = padder.unpad(disp_pr).detach().cpu().squeeze().numpy()
                 #disparities[direction] = padder.unpad(disp_pr).squeeze()
 
-                
-        
             occlusion_mask, disparity_difference = self.get_occlusion_mask(disparities['LR'], disparities['RL'], self.args.stereo_occlusion_threshold, baseline_percentage = baseline_percentage)
             right_occlusion_mask = self.get_right_occlusion_mask(disparities['LR'], disparities['RL'], self.args.stereo_occlusion_threshold)
             depth = (fx * radius * baseline_percentage / 100) / (disparities['LR'])

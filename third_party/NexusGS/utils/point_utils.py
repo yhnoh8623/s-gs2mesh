@@ -5,6 +5,8 @@ import numpy as np
 import os, cv2
 import matplotlib.pyplot as plt
 import math
+import open3d as o3d
+import numpy as np
 
 
 def depths_to_points(view, depthmap, resolution = 1): #resolution = 2 구현 필요
@@ -12,18 +14,26 @@ def depths_to_points(view, depthmap, resolution = 1): #resolution = 2 구현 필
     W, H = view.image_width, view.image_height
     W /= resolution
     H /= resolution
-    intrins = view.intrinsic[:3, :3]
-    for i in range(3):
+    intrins = view.intrinsic[:3, :3].clone()
+    for i in range(2):
         for j in range(3):
             intrins[i, j] /= resolution
-    print(intrins)
-    print(f"point_utils.py : depths to points")
+    #print(intrins)
+    #print(f"point_utils.py : depths to points")
     
     grid_x, grid_y = torch.meshgrid(torch.arange(W, device='cuda').float(), torch.arange(H, device='cuda').float(), indexing='xy')
     points = torch.stack([grid_x, grid_y, torch.ones_like(grid_x)], dim=-1).reshape(-1, 3)
     rays_d = points @ intrins.inverse().T @ c2w[:3,:3].T
     rays_o = c2w[:3,3]
     points = depthmap.reshape(-1, 1) * rays_d + rays_o
+    
+    # pts = points.detach().cpu().numpy()
+
+    # pcd = o3d.geometry.PointCloud()
+    # pcd.points = o3d.utility.Vector3dVector(pts)
+
+    #o3d.io.write_point_cloud('depths_to_points.ply', pcd)
+
     return points
 
 # def depths_to_points(view, depthmap):

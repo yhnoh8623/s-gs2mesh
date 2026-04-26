@@ -59,13 +59,52 @@ def clean_views(iteration, test_iterations, scene, gaussians, pipe, background):
         unvisible_pnts = ~visible_pnts
         gaussians.prune_points(unvisible_pnts, 0)
 
-def adaptive_baseline_selection(args, gaussians, scene, render, pipe, background):
-    train_cams = scene.getTrainCameras()
-    for cam in train_cams:
-        left_image = cam.original_image.permute(1, 2, 0)*255
-        for stereo_cam in cam.stereo_cam_list: 
-            right_image = render(stereo_cam, gaussians, pipe, background)["render"].permute(1, 2, 0)*255
+def adaptive_baseline_selection(args, img_gaussians, im_scene, img_gaussian_renderer, stereo, pipe, background):
+    scan = args.source_path.split('/')[-1]
+    baseline_save = {}
+    for cam in im_scene.getTrainCameras():
+        cam.half_alpha_mask =(F.interpolate(cam.alpha_mask.float()[None][None], scale_factor=0.5, mode='bilinear', align_corners=False)[0][0] > 0.5).to('cuda')
+        
+        gt_image = cam.original_image*255
+        baseline_save[cam.image_name] = {'baseline' : -1, 'feat_loss': -1}
+        for stereo_cam in cam.stereo_cam_list:
+            #print(f"Baseline for {cam.image_name} : {stereo_cam.baseline}")
+            view = img_scene.Camera(0, stereo_cam.R, stereo_cam.T, None, cam.FoVx, cam.FoVy, torch.rand(3,cam.image_height,cam.image_width), None, "abcd", 0)
+            #view = img_scene.Camera(0, cam.R, cam.T, None, cam.FoVx, cam.FoVy, torch.rand(3,cam.image_height,cam.image_width), None, "abcd", 0)
             
+            render_pkg = img_gaussian_renderer.render(view, img_gaussians, pipe, background)
+            stereo_image = render_pkg["render"]*255
+
+            gt_half = F.interpolate(gt_image[None], scale_factor=0.5, mode='bilinear', align_corners=False)[0]
+            stereo_half = F.interpolate(stereo_image[None], scale_factor=0.5, mode='bilinear', align_corners=False)[0]
+            depth, occlusion_mask, depth_right, depth_occlusion_mask = stereo.run_single(gt_half[None], stereo_half[None], baseline_percentage = stereo_cam.baseline, \
+                            fx = fov2focal(cam.FoVx, cam.image_width)/2, radius = cam.radius) # target shape : torch.Size([1, 3, 1162, 1554])
+            #cv2.imwrite(f"baseline_test/{scan}/{cam.image_name}_{stereo_cam.baseline}.png", cv2.cvtColor((stereo_half.permute(1, 2, 0)).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
+            #cv2.imwrite(f"baseline_test/{scan}/depth_{cam.image_name}_{stereo_cam.baseline}.png", get_shading(depth.detach().cpu().numpy(), 1e-4))
+            #cv2.imwrite(f"baseline_test/{scan}/occlusion_{cam.image_name}_{stereo_cam.baseline}.png", (occlusion_mask*255).detach().cpu().numpy())
+            
+            surf_points = depths_to_points(cam, depth, resolution = 2)
+            mask = (depth.view(-1) > 0)
+            mask = mask & (cam.half_alpha_mask.view(-1) > 0.5)
+            feat_loss = get_feat_loss(surf_points, cam, im_scene.getTrainCameras(), mask, resolution=1)
+            
+            occlusion_alpha_mask = cam.half_alpha_mask & occlusion_mask
+            ratio = occlusion_alpha_mask.sum() / cam.half_alpha_mask.sum()
+            
+            print(f"{stereo_cam.baseline}  -->  {feat_loss}, {ratio}")
+            
+            if baseline_save[cam.image_name]['baseline'] == -1:
+                baseline_save[cam.image_name]['baseline'] = stereo_cam.baseline
+                baseline_save[cam.image_name]['feat_loss'] = feat_loss
+            elif baseline_save[cam.image_name]['feat_loss'] >= feat_loss and ratio > 0.7:
+                baseline_save[cam.image_name]['baseline'] = stereo_cam.baseline
+                baseline_save[cam.image_name]['feat_loss'] = feat_loss
+    
+    
+    for cam in im_scene.getTrainCameras():
+        with open(f"baseline_test/{scan}/baseline.txt", 'a') as f:
+            f.write(cam.image_name + ' ' + str(baseline_save[cam.image_name]['baseline']) + '\n')
+    return baseline_save
             
             
 
@@ -290,7 +329,6 @@ def training_2d(dataset, opt, pipe, args):
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
-        
         render_pkg = geo_gaussian_renderer.render(viewpoint_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
@@ -376,6 +414,7 @@ def training_2d(dataset, opt, pipe, args):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
+
 def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
     testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from = args.test_iterations, \
             args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from
@@ -393,46 +432,145 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
     ema_loss_for_log = 0.0
 
     img_gaussians = img_scene.GaussianModel(args)
-
     im_scene = img_scene.Scene(args, img_gaussians, shuffle=False)
     
     if img_checkpoint:
         (model_params, first_iter) = torch.load(img_checkpoint)
         img_gaussians.restore(model_params, opt)
         
+    geo_gaussians = geo_scene.GaussianModel(dataset.sh_degree)
+    ge_scene = geo_scene.Scene(dataset, geo_gaussians, shuffle = False)
+    
+    if geo_checkpont:
+        (model_params, first_iter) = torch.load(geo_checkpoint)
+        geo_gaussians.restore(model_params, opt)
+    
+    img_gaussians.training_setup(opt)
+    geo_gaussians.training_setup(opt)
+    
+        
     scan = args.source_path.split('/')[-1]
     os.makedirs(f"baseline_test/{scan}", exist_ok = True)
     stereo = Stereo(args, device='cuda')
-    
+     
+    baseline_save = adaptive_baseline_selection(args, img_gaussians, im_scene, img_gaussian_renderer, stereo, pipe, background)
+   
     for cam in im_scene.getTrainCameras():
-        cam.half_alpha_mask = F.interpolate(cam.alpha_mask[None][None], scale_factor=0.5, mode='bilinear', align_corners=False)[0][0].to('cuda')
+        cam.gt_half = F.interpolate(cam.original_image[None], scale_factor=0.5, mode='bilinear', align_corners=False)[0]
+        #cam.half_alpha_mask는 adaptive baseline selectioin에서 진행함.
         
-        gt_image = cam.original_image*255
-        for stereo_cam in cam.stereo_cam_list:
-            #print(f"Baseline for {cam.image_name} : {stereo_cam.baseline}")
-            view = img_scene.Camera(0, stereo_cam.R, stereo_cam.T, None, cam.FoVx, cam.FoVy, torch.rand(3,cam.image_height,cam.image_width), None, "abcd", 0)
-            #view = img_scene.Camera(0, cam.R, cam.T, None, cam.FoVx, cam.FoVy, torch.rand(3,cam.image_height,cam.image_width), None, "abcd", 0)
-            
-            render_pkg = img_gaussian_renderer.render(view, img_gaussians, pipe, background)
-            stereo_image = render_pkg["render"]*255
+    for iteration in range(first_iter, opt.iterations + 1):        
 
-            print('!!')
-            gt_half = F.interpolate(gt_image[None], scale_factor=0.5, mode='bilinear', align_corners=False)[0]
-            stereo_half = F.interpolate(stereo_image[None], scale_factor=0.5, mode='bilinear', align_corners=False)[0]
-            depth, occlusion_mask, depth_right, depth_occlusion_mask = stereo.run_single(gt_half[None], stereo_half[None], baseline_percentage = stereo_cam.baseline, \
-                            fx = fov2focal(cam.FoVx, cam.image_width)/2, radius = cam.radius) # target shape : torch.Size([1, 3, 1162, 1554])
-            cv2.imwrite(f"baseline_test/{scan}/{cam.image_name}_{stereo_cam.baseline}.png", cv2.cvtColor((stereo_half.permute(1, 2, 0)).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
-            cv2.imwrite(f"baseline_test/{scan}/depth_{cam.image_name}_{stereo_cam.baseline}.png", get_shading(depth.detach().cpu().numpy(), 1e-4))
-            print('???')
-            surf_points = depths_to_points(cam, depth, resolution = 2)
-            mask = (depth.view(-1) > 0)
-            mask = mask & cam.half_alpha_mask.view(-1)
-            feat_loss = get_feat_loss(surf_points, cam, im_scene.getTrainCameras(), mask, resolution=2)
-             
-            print(f"{stereo_cam.baseline}  -->  {feat_loss}")
+        iter_start.record()
+
+        #gaussians.update_learning_rate(iteration)
+
+        # # Every 1000 its we increase the levels of SH up to a maximum degree
+        # if iteration % 1000 == 0:
+        #     gaussians.oneupSHdegree()
+
+        # Pick a random Camera
+        if not viewpoint_stack:
+            viewpoint_stack = im_scene.getTrainCameras().copy()
+        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+        stereo_viewpoint_cam = viewpoint_cam.stereo_cam
         
+        img_render_pkg = img_gaussian_renderer.render(viewpoint_cam, img_gaussians, pipe, background)
+        img_image, img_depth, img_viewspace_point_tensor, img_visibility_filter, img_radii = img_render_pkg["render"], img_render_pkg["depth"], img_render_pkg["viewspace_points"], img_render_pkg["visibility_filter"], img_render_pkg["radii"]
+        
+        stereo_img_render_pkg = img_gaussian_renderer.render(stereo_viewpoint_cam, img_gaussians, pipe, background)
+        stereo_img_image, stereo_img_depth = stereo_img_render_pkg["render"], stereo_img_render_pkg["depth"]
+        stereo_img_image_half = F.interpolate(stereo_img_image[None], scale_factor=0.5, mode='bilinear', align_corners=False)[0]
     
-    
+        geo_render_pkg = geo_gaussian_renderer.render(viewpoint_cam, geo_gaussians, pipe, background)
+        geo_image, geo_depth, geo_viewspace_point_tensor, geo_visibility_filter, geo_radii = geo_render_pkg["render"], geo_render_pkg["surf_depth"], geo_render_pkg["viewspace_points"], geo_render_pkg["visibility_filter"], geo_render_pkg["radii"]
+        
+        stereo_geo_render_pkg = geo_gaussian_renderer.render(stereo_viewpoint_cam, geo_gaussians, pipe, background)
+        stereo_geo_image, stereo_geo_depth = stereo_geo_render_pkg["render"], stereo_geo_render_pkg["surf_depth"]
+        
+        gt_image = viewpoint_cam.original_image.cuda()
+        img_Ll1 = l1_loss(img_image, gt_image)
+        img_loss = (1.0 - opt.lambda_dssim) * img_Ll1 + opt.lambda_dssim * (1.0 - ssim(img_image, gt_image))
+        
+        geo_Ll1 = l1_loss(geo_image, gt_image)
+        geo_loss = (1.0 - opt.lambda_dssim) * gep_Ll1 + opt.lambda_dssim * (1.0 - ssim(geo_image, gt_image))
+        
+        rend_dist = render_pkg["rend_dist"]
+        rend_normal  = render_pkg['rend_normal']
+        surf_normal = render_pkg['surf_normal']
+        normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
+        normal_loss = opt.lambda_normal * (normal_error).mean()
+        dist_loss = opt.lambda_dist * (rend_dist).mean()
+        geo_loss += (dist_loss + normal_loss)
+        
+
+        stereo_depth, occlusion_mask, stereo_depth_right, right_occlusion_mask = stereo.run_single_w_gradient((viewpoint_cam.gt_half*255)[None], stereo_img_image_half[None],
+                            baseline_percentage = stereo_viewpoint_cam.baseline, \
+                            fx = fov2focal(viewpoint_cam.FoVx, viewpoint_cam.image_width)/2, radius = viewpoint_cam.radius)
+        
+        total_loss.backward()
+
+        iter_end.record()
+        
+        #print(render_pkg['surf_depth'].shape)
+        if iteration%100 == 0:
+            cv2.imwrite(os.path.join(f"2d_test/{scan}/{iteration}_depth.png"), get_shading(render_pkg['surf_depth'][0].detach().cpu().numpy(), 1e-4))
+
+        with torch.no_grad():
+            # Progress bar
+            ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
+            ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
+            ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
+
+
+            if iteration % 10 == 0:
+                loss_dict = {
+                    "Loss": f"{ema_loss_for_log:.{5}f}",
+                    "distort": f"{ema_dist_for_log:.{5}f}",
+                    "normal": f"{ema_normal_for_log:.{5}f}",
+                    "Points": f"{len(gaussians.get_xyz)}"
+                }
+                progress_bar.set_postfix(loss_dict)
+
+                progress_bar.update(10)
+            if iteration == opt.iterations:
+                progress_bar.close()
+
+            # Log and save
+            if tb_writer is not None:
+                tb_writer.add_scalar('train_loss_patches/dist_loss', ema_dist_for_log, iteration)
+                tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
+
+           # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, geo_gaussian_renderer.render, (pipe, background))
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss,
+                            testing_iterations, scene, img_gaussian_renderer.render, (pipe, background))
+
+            if (iteration in saving_iterations):
+                print("\n[ITER {}] Saving Gaussians".format(iteration))
+                scene.save(iteration)
+                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+
+
+            # Densification
+            if iteration < opt.densify_until_iter:
+                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
+                
+                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                    gaussians.reset_opacity()
+
+            # Optimizer step
+            if iteration < opt.iterations:
+                gaussians.optimizer.step()
+                gaussians.optimizer.zero_grad(set_to_none = True)
+
+            if (iteration in checkpoint_iterations):
+                print("\n[ITER {}] Saving Checkpoint".format(iteration))
+                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
     
 
 
@@ -550,7 +688,7 @@ if __name__ == "__main__":
     #training_3d(lp.extract(args), op.extract(args), pp.extract(args), args)
     
     args.model_path = os.path.join(model_path_save, "2d")
-    #training_2d(lp.extract(args), op.extract(args), pp.extract(args), args)
+    training_2d(lp.extract(args), op.extract(args), pp.extract(args), args)
     
     args.model_path = os.path.join(model_path_save, "final")
     img_checkpoint = os.path.join(model_path_save, "3d/chkpnt" + str(args.warmup_iterations) + ".pth")

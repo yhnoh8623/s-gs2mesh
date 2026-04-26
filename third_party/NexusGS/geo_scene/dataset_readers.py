@@ -45,6 +45,8 @@ class CameraInfo(NamedTuple):
     height: int
     mask: np.array
     bounds: np.array
+    feat: list = None
+    pair: list = None
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud

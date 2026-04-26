@@ -40,7 +40,7 @@ class Camera(nn.Module):
         self.baseline = baseline
         self.radius = None
         if mask is not None:
-            self.alpha_mask = torch.tensor(mask)
+            self.alpha_mask = torch.tensor(mask).bool()
         else:
             self.alpha_mask = None
         self.bounds = bounds
