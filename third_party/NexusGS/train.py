@@ -493,7 +493,7 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
         img_loss = (1.0 - opt.lambda_dssim) * img_Ll1 + opt.lambda_dssim * (1.0 - ssim(img_image, gt_image))
         
         geo_Ll1 = l1_loss(geo_image, gt_image)
-        geo_loss = (1.0 - opt.lambda_dssim) * gep_Ll1 + opt.lambda_dssim * (1.0 - ssim(geo_image, gt_image))
+        geo_loss = (1.0 - opt.lambda_dssim) * geo_Ll1 + opt.lambda_dssim * (1.0 - ssim(geo_image, gt_image))
         
         rend_dist = render_pkg["rend_dist"]
         rend_normal  = render_pkg['rend_normal']
@@ -503,10 +503,26 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
         dist_loss = opt.lambda_dist * (rend_dist).mean()
         geo_loss += (dist_loss + normal_loss)
         
+        #==================mutual loss==========================#
+        mutual_image_loss = (1.0 - opt.lambda_dssim) * l1_loss(stereo_img_image, stereo_geo_image) + opt.lambda_dssim * (1.0 - ssim(stereo_img_image, stereo_geo_image))
+        #depth(정규화) 할 차례
 
+        
+        
+        #==================feat loss==========================#
         stereo_depth, occlusion_mask, stereo_depth_right, right_occlusion_mask = stereo.run_single_w_gradient((viewpoint_cam.gt_half*255)[None], stereo_img_image_half[None],
                             baseline_percentage = stereo_viewpoint_cam.baseline, \
                             fx = fov2focal(viewpoint_cam.FoVx, viewpoint_cam.image_width)/2, radius = viewpoint_cam.radius)
+        
+        surf_points = depths_to_points(viewpoint_cam, stereo_depth, resolution = 2)
+        mask = (stereo_depth.view(-1) > 0)
+        mask = mask & (cam.half_alpha_mask.view(-1) > 0.5)
+        feat_loss = get_feat_loss(surf_points, cam, im_scene.getTrainCameras(), mask, resolution=1)
+        img_loss += 0.5 * feat_loss
+        
+        
+        
+        
         
         total_loss.backward()
 
