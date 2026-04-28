@@ -27,6 +27,12 @@ def l1_loss_mask(network_output, gt, mask = None):
 def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
 
+def l2_loss_mask(network_output, gt, mask = None):
+    if mask is None:
+        return l2_loss(network_output, gt)
+    else:
+        (((network_output - gt) * mask) ** 2).sum() / mask.sum()
+
 def gaussian(window_size, sigma):
     gauss = torch.Tensor([exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
     return gauss / gauss.sum()

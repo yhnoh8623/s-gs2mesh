@@ -19,7 +19,7 @@ import os
 import cv2
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, l1_loss_mask, ssim, get_depth_ranking_loss
+from utils.loss_utils import l1_loss, l1_loss_mask, ssim, get_depth_ranking_loss, l2_loss, l2_loss_mask
 from utils.general_utils import get_shading
 #from gaussian_renderer import render, network_gui
 import img_gaussian_renderer
@@ -177,7 +177,7 @@ def training_3d(dataset, opt, pipe, args):
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         gt_image = viewpoint_cam.original_image.cuda()
 
-        if args.dataset_type == 'dtu':
+        if args.dataset_type == 'dtu' or args.dataset_type == 'DTU':
             if 'scan110' not in args.source_path :
                 bg_mask = (gt_image.max(0, keepdim=True).values < 30/255)
             else:
@@ -328,11 +328,28 @@ def training_2d(dataset, opt, pipe, args):
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
+        
+        gt_image = viewpoint_cam.original_image.cuda()
+        if args.dataset_type == 'dtu' or args.dataset_type == 'DTU':
+            if 'scan110' not in args.source_path :
+                bg_mask = (gt_image.max(0, keepdim=True).values < 30/255)
+            else:
+                bg_mask = (gt_image.max(0, keepdim=True).values < 15/255)
+
+            bg_mask_clone = bg_mask.clone()
+            for i in range(1, 50):
+                bg_mask[:, i:] *= bg_mask_clone[:, :-i]
+            gt_image[bg_mask.repeat(3,1,1)] = 0.
+
+            render_pkg = geo_gaussian_renderer.render(viewpoint_cam, geo_gaussians, pipe, background)
+            (render_pkg["rend_alpha"][bg_mask]**2).mean().backward()
+            geo_gaussians.optimizer.step()
+            geo_gaussians.optimizer.zero_grad(set_to_none = True)
+            
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         render_pkg = geo_gaussian_renderer.render(viewpoint_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
-        gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         
@@ -475,6 +492,23 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         stereo_viewpoint_cam = viewpoint_cam.stereo_cam
         
+        gt_image = viewpoint_cam.original_image.cuda()
+        if args.dataset_type == 'dtu' or args.dataset_type == 'DTU':
+            if 'scan110' not in args.source_path :
+                bg_mask = (gt_image.max(0, keepdim=True).values < 30/255)
+            else:
+                bg_mask = (gt_image.max(0, keepdim=True).values < 15/255)
+
+            bg_mask_clone = bg_mask.clone()
+            for i in range(1, 50):
+                bg_mask[:, i:] *= bg_mask_clone[:, :-i]
+            gt_image[bg_mask.repeat(3,1,1)] = 0.
+
+            render_pkg = img_gaussian_renderer.render(viewpoint_cam, img_gaussians, pipe, background)
+            (render_pkg["alpha"][bg_mask]**2).mean().backward()
+            img_gaussians.optimizer.step()
+            img_gaussians.optimizer.zero_grad(set_to_none = True)
+        
         img_render_pkg = img_gaussian_renderer.render(viewpoint_cam, img_gaussians, pipe, background)
         img_image, img_depth, img_viewspace_point_tensor, img_visibility_filter, img_radii = img_render_pkg["render"], img_render_pkg["depth"], img_render_pkg["viewspace_points"], img_render_pkg["visibility_filter"], img_render_pkg["radii"]
         
@@ -488,7 +522,6 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
         stereo_geo_render_pkg = geo_gaussian_renderer.render(stereo_viewpoint_cam, geo_gaussians, pipe, background)
         stereo_geo_image, stereo_geo_depth = stereo_geo_render_pkg["render"], stereo_geo_render_pkg["surf_depth"]
         
-        gt_image = viewpoint_cam.original_image.cuda()
         img_Ll1 = l1_loss(img_image, gt_image)
         img_loss = (1.0 - opt.lambda_dssim) * img_Ll1 + opt.lambda_dssim * (1.0 - ssim(img_image, gt_image))
         
@@ -506,35 +539,43 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
         #==================mutual loss==========================#
         mutual_image_loss = (1.0 - opt.lambda_dssim) * l1_loss(stereo_img_image, stereo_geo_image) + opt.lambda_dssim * (1.0 - ssim(stereo_img_image, stereo_geo_image))
         #depth(정규화) 할 차례
+        stereo_img_depth_reg = stereo_img_depth / stereo_img_depth.max()
+        stereo_geo_depth_reg = stereo_geo_depth / stereo_geo_depth.max()
+        mutual_depth_loss = l2_loss(stereo_img_depth_reg, stereo_geo_depth_reg.detach())
 
+        mutual_loss = mutual_image_loss + mutual_depth_loss
         
-        
-        #==================feat loss==========================#
+        #==================stereo feat loss==========================#
         stereo_depth, occlusion_mask, stereo_depth_right, right_occlusion_mask = stereo.run_single_w_gradient((viewpoint_cam.gt_half*255)[None], stereo_img_image_half[None],
                             baseline_percentage = stereo_viewpoint_cam.baseline, \
                             fx = fov2focal(viewpoint_cam.FoVx, viewpoint_cam.image_width)/2, radius = viewpoint_cam.radius)
         
         surf_points = depths_to_points(viewpoint_cam, stereo_depth, resolution = 2)
         mask = (stereo_depth.view(-1) > 0)
-        mask = mask & (cam.half_alpha_mask.view(-1) > 0.5)
+        mask = mask & (cam.half_alpha_mask.view(-1) > 0.5) & (occlusion_mask.view(-1))
         feat_loss = get_feat_loss(surf_points, cam, im_scene.getTrainCameras(), mask, resolution=1)
-        img_loss += 0.5 * feat_loss
         
         
+        #====================stereo depth loss=========================#
+        stereo_depth_reg = stereo_depth / stereo_depth.max()
+        geo_depth_reg = geo_depth / geo_depth.max()
+        
+        stereo_depth_3d_loss = l2_loss_mask(stereo_depth_reg, geo_depth_reg.detach(), cam.half_alpha_mask)
+        stereo_depth_2d_loss = l2_loss_mask(stereo_depth_reg.detach(), geo_depth_reg, cam.half_alpha_mask & occlusion_mask)
+        
+        img_loss += (mutual_loss + feat_loss + stereo_depth_3d_loss)
+        geo_loss += (mutual_loss + stereo_depth_2d_loss)
+        
+        img_loss.backward()
+        geo_loss.backward()
         
         
-        
-        total_loss.backward()
-
         iter_end.record()
         
-        #print(render_pkg['surf_depth'].shape)
-        if iteration%100 == 0:
-            cv2.imwrite(os.path.join(f"2d_test/{scan}/{iteration}_depth.png"), get_shading(render_pkg['surf_depth'][0].detach().cpu().numpy(), 1e-4))
-
+       
         with torch.no_grad():
             # Progress bar
-            ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
+            ema_loss_for_log = 0.4 * img_loss.item() + 0.6 * ema_loss_for_log
             ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
             ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
 
@@ -544,7 +585,7 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
                     "Loss": f"{ema_loss_for_log:.{5}f}",
                     "distort": f"{ema_dist_for_log:.{5}f}",
                     "normal": f"{ema_normal_for_log:.{5}f}",
-                    "Points": f"{len(gaussians.get_xyz)}"
+                    "Points": f"{len(img_.get_xyz)}"
                 }
                 progress_bar.set_postfix(loss_dict)
 
@@ -564,34 +605,35 @@ def training_mutual(dataset, opt, pipe, args, img_checkpoint, geo_checkpoint):
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+                torch.save((img_gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
 
             # Densification
             if iteration < opt.densify_until_iter:
-                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                img_gaussians.max_radii2D[img_visibility_filter] = torch.max(img_gaussians.max_radii2D[img_visibility_filter], img_radii[img_visibility_filter])
+                img_gaussians.add_densification_stats(img_viewspace_point_tensor, img_visibility_filter)
 
+                geo_gaussians.max_radii2D[geo_visibility_filter] = torch.max(geo_gaussians.max_radii2D[geo_visibility_filter], geo_radii[geo_visibility_filter])
+                geo_gaussians.add_densification_stats(geo_viewspace_point_tensor, geo_visibility_filter)
+                
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
+                    img_gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
+                    geo_gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                    gaussians.reset_opacity()
+                    img_gaussians.reset_opacity()
+                    geo_gaussians.reset_opacity()
+                    
 
             # Optimizer step
             if iteration < opt.iterations:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none = True)
+                img_gaussians.optimizer.step()
+                img_gaussians.optimizer.zero_grad(set_to_none = True)
+                geo_gaussians.optimizer.step()
+                geo_gaussians.optimizer.zero_grad(set_to_none = True)
 
-            if (iteration in checkpoint_iterations):
-                print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
     
-
-
-           
-
 def prepare_output_and_logger(args):
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
