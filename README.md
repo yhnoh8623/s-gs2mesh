@@ -57,6 +57,19 @@ data/DTU_little_GT/
 └── SampleSet/MVS_Data/  official DTU evaluation data (Points/stl, ObsMask)
 ```
 
+### Optical flow
+
+The epipolar depth initialization follows [NexusGS](https://github.com/USMizuki/NexusGS) and needs the optical flows
+between every ordered pair of input views. As in NexusGS, we estimate them with
+[FlowFormer++](https://github.com/XiaoyuShi97/FlowFormerPlusPlus) (pre-trained weights from its repository):
+
+- For the `i`-th and `j`-th input images (in sorted order of `images/`, `i ≠ j`), estimate the forward flow from
+  image `i` to image `j` at the full image resolution.
+- Save it in the Middlebury `.flo` format as `flow/<name of image i>_<i>_<j>.flo`,
+  e.g. `flow/0000_0_1.flo` is the flow from `images/0000.png` to `images/0001.png`.
+
+Three input views give six files: `0000_0_1.flo 0000_0_2.flo 0001_1_0.flo 0001_1_2.flo 0002_2_0.flo 0002_2_1.flo`.
+
 ## Running
 
 Train, extract the mesh and evaluate every scan:
