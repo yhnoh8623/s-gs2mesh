@@ -9,6 +9,7 @@
 </div>
 <p align="center">
   <a href="https://arxiv.org/abs/2610.04203" target='_blank'><img src="http://img.shields.io/badge/cs.CV-arXiv%3A2610.04203-b31b1b"></a>
+  <a href="https://yhnoh8623.github.io/projects/s-gs2mesh/" target='_blank'><img src="http://img.shields.io/badge/Project_Page-Sparse--GS2Mesh-lightblue"></a>
 </p>
 
 ## Overview
