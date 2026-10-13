@@ -1,6 +1,7 @@
 <h2 align="center">
   Sparse-GS2Mesh: 3D Gaussian Splatting Guided by Novel Stereo Views and 2DGS for Sparse View Surface Reconstruction
 </h2>
+<h4 align="center">NeurIPS 2026 Workshop (PhysWorldAI)</h4>
 <div align="center">
   Younghyun Noh&emsp;
   Minje Kim&emsp;
@@ -11,6 +12,8 @@
 </p>
 
 ## Overview
+
+<div align="center"><img src="./media/overview.png" width=100%></div>
 
 Sparse-GS2Mesh reconstructs surfaces from three input views. A 3DGS and a 2DGS initialized with epipolar depth
 priors are warmed up, then
